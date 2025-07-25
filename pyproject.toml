@@ -1,0 +1,43 @@
+[project]
+name = "otazeroshotfilter"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "bitsandbytes>=0.46.0",
+    "numpy>=2.2.6",
+    "optuna>=4.4.0",
+    "packaging>=25.0",
+    "scikit-learn>=1.7.0",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "transformers<=4.51.3",
+    "typed-argument-parser>=1.10.1",
+    "unsloth>=2025.6.11",
+    "unsloth-zoo>=2025.6.7",
+    "uv>=0.7.17",
+    "xformers>=0.0.30",
+]
+
+[[tool.uv.index]]
+name = "pytorch-src"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-src" },
+]
+torchvision = [
+  { index = "pytorch-src" },
+]
+torchaudio = [
+  { index = "pytorch-src" },
+]
+xformers = [
+  { index = "pytorch-src" },
+]
+# unsloth = [
+#   { git = "https://github.com/unslothai/unsloth.git" },
+# ]
