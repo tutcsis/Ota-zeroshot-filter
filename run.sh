@@ -24,4 +24,4 @@ export TORCH_USE_CUDA_DSA=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 source .venv/bin/activate
-time uv run python src/q70.py
+time uv run python src/outline_sample.py
