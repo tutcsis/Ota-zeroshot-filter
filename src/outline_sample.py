@@ -1,4 +1,5 @@
 import torch
+import json
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from outlines.types import JsonSchema
@@ -40,7 +41,7 @@ def truncation_text(text):
     return text[:1000]
 
 # 4096 トークンまで
-prompt = """
+prompt = f"""
 以下のテキストに対して、各項目を分類してください。
 
 # テキスト:
@@ -65,4 +66,7 @@ prompt = """
 output_type = JsonSchema(schema)
 result = ol_model(prompt, output_type=output_type, max_new_tokens=200)
 print(result)
+json_result = json.loads(result)
+
+
 # 正解: obscene だけ yes
