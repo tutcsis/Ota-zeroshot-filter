@@ -10,6 +10,7 @@ dependencies = [
     "optuna>=4.4.0",
     "outlines>=1.1.1",
     "packaging>=25.0",
+    "peft>=0.16.0",
     "scikit-learn>=1.7.0",
     "torch>=2.7.0",
     "torchvision>=0.22.0",

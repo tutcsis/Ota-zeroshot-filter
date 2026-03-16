@@ -1,15 +1,17 @@
 import torch
 import json
 import numpy as np
+import utils
 from datasets import load_dataset, Dataset
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from datetime import datetime
 from pathlib import Path
 from tap import Tap
 from typing import Literal
 from collections import Counter
 from tqdm import tqdm
+from peft import prepare_model_for_kbit_training
 
 from outlines.types import JsonSchema
 from outlines.models import Transformers
@@ -17,18 +19,32 @@ from outlines.models import Transformers
 
 class Args(Tap):
   data_path: str = "data/toxicity_dataset_ver2.jsonl"
-  max_length: int = 128
-  # max_length: int = 1024
+  # max_length: int = 128
+  # max_length: int = 3072
+  # max_length: int = 2048
+  max_length: int = 1024
 
-  model_name: str = "llm-jp/llm-jp-3.1-1.8b-instruct4"
+  # model_name: str = "llm-jp/llm-jp-3.1-1.8b-instruct4"
   # model_name: str = "llm-jp/llm-jp-3-7.2b-instruct3"
+  model_name: str = "llm-jp/llm-jp-3.1-13b-instruct4"
   output_dir: str = ""
-  output_metrics_path: str = "zeroshot_metrics.txt"
   
   seed: int = 42
 
+  use_bf16: bool = False
+  use_fp16: bool = True
+
   device: Literal["cuda", "cpu"] = "cuda" if torch.cuda.is_available() else "cpu"
   debug: bool = True
+
+  @property
+  def torch_dtype(self):
+    if self.use_bf16:
+      return torch.bfloat16
+    elif self.use_fp16:
+      return torch.float16
+    else:
+      return torch.float32
 
   def process_args(self):
     if self.output_dir:
@@ -45,6 +61,36 @@ class Args(Tap):
       "dataset_path": self.data_path,
       "model_name": self.model_name
     }), file=self.log_file )
+
+  def log(self, metrics: dict) -> None:
+    print("metrics: ", metrics)
+    print("tasknames: ", self.tasknames)
+    log_file = self.output_dir / f"log.csv"
+    for category in self.tasknames:
+      category_metrics = {
+        "category": category,
+        "accuracy": metrics[category].get(f"accuracy", -1),
+        "precision": metrics[category].get(f"precision", -1),
+        "recall": metrics[category].get(f"recall", -1),
+        "f1": metrics[category].get(f"f1", -1),
+        "TN": metrics[category].get("TN", -1),
+        "FP": metrics[category].get("FP", -1),
+        "FN": metrics[category].get("FN", -1),
+        "TP": metrics[category].get("TP", -1),
+      }
+      utils.log(category_metrics, log_file)
+      tqdm.write(
+        f"category: {category} \t"
+        f"accuracy: {category_metrics[f'accuracy']:.4f} \t"
+        f"precision: {category_metrics[f'precision']:.4f} \t"
+        f"recall: {category_metrics[f'recall']:.4f} \t"
+        f"f1: {category_metrics[f'f1']:.4f} \t"
+        f"TN: {category_metrics[f'TN']} \t"
+        f"FP: {category_metrics[f'FP']} \t"
+        f"FN: {category_metrics[f'FN']} \t"
+        f"TP: {category_metrics[f'TP']}"
+      )
+      print(category, "ok!!")
 
 def main(args):
   # 1. Process arguments
@@ -78,9 +124,19 @@ def main(args):
     
   # 2. Load model and tokenizer
   tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-  model = AutoModelForCausalLM.from_pretrained(args.model_name)
-  model = model.to(device)
+  quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype=args.torch_dtype,
+  )
+  model = AutoModelForCausalLM.from_pretrained(
+    args.model_name,
+    device_map="auto",
+    torch_dtype=args.torch_dtype,
+    quantization_config=quantization_config
+  )
+  model = prepare_model_for_kbit_training(model)
   model.eval()
   ol_model = Transformers(model, tokenizer)
 
@@ -88,6 +144,8 @@ def main(args):
   predictions = []
   labels = []
   print(test_dataset.num_rows, "rows in the test dataset")
+  # for curr_idx in range(100):
+  max_context_len = 0
   for curr_idx in range(test_dataset.num_rows):
     text = test_dataset[curr_idx]["text"]
     prompt = f"""
@@ -108,6 +166,8 @@ def main(args):
 """
 
     result = ol_model(prompt, output_type=output_type, max_new_tokens=200)
+    context_len = len(tokenizer.encode(prompt)) + len(tokenizer.encode(result))
+    max_context_len = max(max_context_len, context_len)
     result_dict = json.loads(result)
     # print(f"Index: {curr_idx}")
     # print(f'prompt: {prompt}')
@@ -124,7 +184,7 @@ def main(args):
       curr_labels.append(1 if test_dataset[curr_idx][taskname] == "yes" else 0)
     predictions.append(curr_predictions)
     labels.append(curr_labels)
-
+  print(f"max_context_len: {max_context_len}")
 
   # 4. Calc metrics
   def compute_metrics(predictions, labels):
@@ -143,7 +203,7 @@ def main(args):
       tn, fp, fn, tp = cm.ravel()
       if args.debug:
         print(f"Confusion Matrix for {taskname}:\n{cm}")
-        print(f"label_counts for {taskname}: {label_counts}")
+        # print(f"{taskname} answer count (yes: {label_counts[0]}), (no: {label_counts[1]})")
       if cm.shape != (2, 2):
         print(f"Warning: Confusion matrix for {taskname} is not 2x2. It may not be binary classification.")
       metrics[taskname] = {
@@ -159,13 +219,9 @@ def main(args):
     return metrics
 
   metrics = compute_metrics(predictions, labels)
-  print("Metrics:")
-  for taskname, metric in metrics.items():
-    print(f"{taskname}: {metric}")
-    with open(args.output_metrics_path, 'a') as f:
-      print(f"Task: {taskname}", file=f)
-      print(json.dumps(metric, indent=2), file=f)
-      print("-" * 50, file=f)
+  print(metrics)
+  args.log(metrics)
+  print(f"Metrics saved to, {args.output_dir} / log.csv")
 
 if __name__ == "__main__":
   args = Args().parse_args()
